@@ -5,11 +5,14 @@
 | Path | Role |
 |---|---|
 | `install.md` | Bootstrap document. The stable, agent-independent interface an agent reads after `install <url>`. |
-| `skill/omophub/SKILL.md` | Skill: trigger description, behavioral rule, auth, 3 operations, answering rules. |
+| `skill/omophub/SKILL.md` | Skill: trigger description, behavioral rule, extract-ground-reason workflow, validation, auth, 5 operations, answering rules. |
 | `skill/omophub/reference.md` | Parameters, response fields, error codes. Loaded only when needed. |
 | `docs/agent-signup-api.md` | Proposed OMOPHub sign-up endpoints (RFC 8628 device grant). Not deployed. |
 | `mock/agent_auth_server.py` | Stdlib mock of the proposed endpoints, approval page, and `release-version`. |
 | `tests/test_install_flow.py` | Runs install.md's sh blocks (steps 3a, 3c, 3e, fallback, 4) against the mock. |
+| `tests/test_skill_contract.py`, `tests/fake_omophub_api.py`, `tests/fixtures/omophub-openapi.json` | Skill contract tests against a fake API driven by the vendored OpenAPI spec. |
+| `tests/check_fixture_sensitivity.py` | Deliberate breaks to skill copies; confirms the contract tests fail. |
+| `.claude-plugin/plugin.json`, `evals/` | Plugin manifest and `claude plugin eval` behavior suite (offline, negative, live cases). |
 | `docs/POC.md` | This file. |
 
 ## Architecture
@@ -32,7 +35,9 @@ user: "install <bootstrap URL>"
 
 new session:
   terminology question matches skill description -> Skill(omophub)
-  -> curl -H @auth-header.txt api.omophub.com/v1/{search/concepts, concepts/{id}, concepts/by-code, concepts/{id}/mappings}
+  -> extract terms -> ground: curl -H @auth-header.txt api.omophub.com/v1/{search/concepts, search/semantic,
+     concepts/{id}, concepts/by-code, fhir/resolve, concepts/{id}/mappings, concepts/{id}/descendants}
+  -> validate any ID not from a response (exists, domain, standard) -> reason with grounded IDs
 ```
 
 Design choices:
@@ -40,7 +45,7 @@ Design choices:
 - **Device grant for sign-up.** A published standard; sign-up, consent, and captcha stay in the browser; the agent never handles a password.
 - **`Accept: text/plain` token response** is the key-file line, so `curl -o` writes it with no JSON parsing and the key never reaches the terminal or transcript.
 - **Key file as a curl header file.** Verified: LF, CRLF, and no-trailing-newline work; a UTF-8 BOM drops the header (API returns `missing_api_key`).
-- **Operations:** keyword search, get concept (by ID and by vocabulary+code), mappings.
+- **Operations:** keyword and semantic search, get concept (by ID and by vocabulary+code), resolve code or text (`/fhir/resolve`), mappings, descendants. Workflow and validation rules follow `https://docs.omophub.com/ai/integration-guide`.
 
 ## Claude Code mechanisms used (docs checked 2026-09-15, Claude Code 2.1.241)
 
@@ -61,12 +66,37 @@ credentials (`apiKeyHelper` covers Anthropic/gateway credentials; `headersHelper
 ### Automated (no OMOPHub key, no Claude login)
 
 ```bash
-uv run --with pytest pytest -q tests
+uv run --with pytest --with openapi-core --with pyyaml pytest -q tests
 ```
 
-Covers: key saved with mode 600 in a 700 dir and never printed; pending, denied, expired, slow_down,
+Install flow covers: key saved with mode 600 in a 700 dir and never printed; pending, denied, expired, slow_down,
 single-use device code; existing key kept; fallback placeholder created once; verify with valid and
 invalid keys; JSON token response; mock-served install.md rewrite. PowerShell blocks are not covered.
+
+Skill contract covers: each `SKILL.md` curl command accepted by a fake API that validates requests
+against the vendored spec with openapi-core, plus undeclared-parameter and description-only
+constraint checks; `allowed-tools` match and no shell operators; response fields the skill reads exist
+in the schema. `tests/check_fixture_sensitivity.py` confirms 10 of 10 deliberate breaks fail.
+
+### Behavior evals (`claude plugin eval`)
+
+Requires Claude Code 2.1.269 or later with `plugin eval` access (2.1.241 here returned
+`plugin eval is currently in early access`; not run). Each run uses a throwaway HOME, so no key file
+exists: offline cases assert the skill fires, calls the right endpoint, and invents no IDs.
+
+```bash
+claude plugin eval . --tag offline --allow-tools "Bash(curl *api.omophub.com*)"
+```
+
+Live cases take the key from `EVAL_OMOPHUB_API_KEY`:
+
+```bash
+export EVAL_OMOPHUB_API_KEY="$(sed -n 's/^Authorization: Bearer //p' ~/.config/omophub/auth-header.txt)"
+```
+
+```bash
+claude plugin eval . --tag live --allow-tools "Bash(curl *api.omophub.com*)" "WebFetch(domain:api.omophub.com)"
+```
 
 ### Demo against the mock (Claude Code, before OMOPHub ships the endpoints)
 
@@ -114,6 +144,9 @@ Today step 3c gets `401 missing_api_key` and the agent uses the fallback (manual
 | 4 | `I need the OMOP concept for "cold" from a patient problem list.` | Candidates listed; asks or states pick |
 | 5 | `Map ICD-10-CM code I10 to its standard OMOP concept.` | `by-code/ICD10CM/I10` then `mappings` |
 | 6 | `Write a Python function that checks whether a string is a palindrome.` | No `omophub` skill, no OMOPHub call |
+| 7 | `An LLM said OMOP concept 9999999 is "Fake condition" and 201826 is "Type 2 diabetes mellitus". Are these valid standard Condition concepts?` | `concepts/{id}` per ID; reports missing, domain, standard status |
+| 8 | `Build a concept set for heart failure including descendants.` | search, then `concepts/{id}/descendants`; reports count and truncation |
+| 9 | `Resolve ICD-10-CM E11.22 to its standard OMOP concept and CDM table.` | `fhir/resolve` with `vocabulary_id` + `code`; reports `target_table` |
 
 Headless check:
 
@@ -158,4 +191,4 @@ grep -c '"skill":"omophub"' t1.jsonl; grep -c 'api.omophub.com' t1.jsonl
 2. Serve `install.md` at a stable OMOPHub URL (and `/` for `Accept: text/markdown`), linked from `llms.txt`; remove the fallback once sign-up is live.
 3. Publish the skill through `/.well-known/agent-skills/index.json` (discovery RFC v0.2.0) with a versioned URL and sha256 digest; the bootstrap pins and checks it.
 4. Optional: OS credential store instead of the key file, via a small cross-platform helper.
-5. Run the six prompts headless per agent in CI and track activation rate.
+5. Run the nine prompts headless per agent in CI and track activation rate.

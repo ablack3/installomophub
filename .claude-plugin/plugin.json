@@ -1,0 +1,8 @@
+{
+  "name": "omophub",
+  "version": "0.2.0",
+  "description": "OMOPHub medical terminology skill: search, resolve, validate, and map OMOP concepts through the OMOPHub API.",
+  "author": { "name": "Adam Black" },
+  "homepage": "https://github.com/ablack3/installomophub",
+  "skills": ["./skill/"]
+}
