@@ -5,81 +5,117 @@
 | Path | Role |
 |---|---|
 | `README.md` | Bootstrap document. The stable, agent-independent interface an agent reads after `install <url>`. |
-| `skill/omophub/SKILL.md` | Skill: trigger description, behavioral rule, auth, 3 operations, answering rules (62 lines). |
+| `skill/omophub/SKILL.md` | Skill: trigger description, behavioral rule, auth, 3 operations, answering rules. |
 | `skill/omophub/reference.md` | Parameters, response fields, error codes. Loaded only when needed. |
+| `docs/agent-signup-api.md` | Proposed OMOPHub sign-up endpoints (RFC 8628 device grant). Not deployed. |
+| `mock/agent_auth_server.py` | Stdlib mock of the proposed endpoints, approval page, and `release-version`. |
+| `tests/test_install_flow.py` | Runs the README's sh blocks (steps 3a, 3c, 3e, fallback, 4) against the mock. |
 | `docs/POC.md` | This file. |
 
 ## Architecture
 
 ```
 user: "install <bootstrap URL>"
-  -> agent reads README.md (bootstrap, agent-independent)
-  -> step 1: agent picks its user-level skills dir from a table (Claude Code: ~/.claude/skills)
-  -> step 2: curl downloads skill/omophub/{SKILL.md,reference.md} from GitHub raw
-  -> step 3: agent creates ~/.config/omophub/auth-header.txt with a placeholder,
-             opens dashboard.omophub.com/api-keys and the file; user pastes key, replies "done"
-  -> step 4: curl -H @auth-header.txt GET /v1/vocabularies/release-version -> "success":true
+  -> agent reads README.md
+  -> step 1: pick user-level skills dir (Claude Code: ~/.claude/skills or $CLAUDE_CONFIG_DIR/skills)
+  -> step 2: curl downloads skill/omophub/{SKILL.md,reference.md}
+  -> step 3: key
+       3a  key file exists? -> skip to 4
+       3b  agent asks the user for permission
+       3c  POST /v1/auth/device/code            -> device_code, user_code, verification_uri_complete
+       3d  agent opens browser; user signs in or signs up, checks user_code, clicks Approve
+       3e  POST /v1/auth/device/token (Accept: text/plain) -> curl -o ~/.config/omophub/auth-header.txt
+           (umask 077; body is "Authorization: Bearer oh_..."; only the path is printed)
+       fallback (3c not 200): placeholder file + dashboard page; user pastes key
+  -> step 4: curl -H @auth-header.txt GET /v1/vocabularies/release-version
   -> step 5: user starts a new session
 
 new session:
-  skill listing contains omophub description
-  -> terminology question matches description -> Skill(omophub) loads SKILL.md
+  terminology question matches skill description -> Skill(omophub)
   -> curl -H @auth-header.txt api.omophub.com/v1/{search/concepts, concepts/{id}, concepts/by-code, concepts/{id}/mappings}
-  -> answer cites concept_id / vocabulary_id / vocab_release from the response
 ```
 
 Design choices:
-- **No scripts in the skill.** Plain `curl` exists on macOS, Linux, and Windows 10+ (`curl.exe`). Any agent that can run a shell can follow it.
-- **Credential as a curl header file.** `curl -H @file` reads the header from disk, so the key is absent from argv, shell history, the transcript, and the skill. Verified locally: LF, CRLF, and no-trailing-newline files work; a UTF-8 BOM silently drops the header (API then returns `missing_api_key`).
-- **Operations chosen:** keyword search, get concept (by ID and by vocabulary+code), mappings. Semantic search, relationships, and hierarchy are one line each in `reference.md`.
-- **Upstream skill** `https://docs.omophub.com/skill.md` (Mintlify-generated, `name: Omop Hub`, ETL/FHIR focused, 11,879 bytes) is linked from `reference.md`, not copied.
+- **No scripts in the skill or installer.** Only `curl`, which exists on macOS, Linux, and Windows 10+ (`curl.exe`).
+- **Device grant for sign-up.** A published standard; sign-up, consent, and captcha stay in the browser; the agent never handles a password.
+- **`Accept: text/plain` token response** is the key-file line, so `curl -o` writes it with no JSON parsing and the key never reaches the terminal or transcript.
+- **Key file as a curl header file.** Verified: LF, CRLF, and no-trailing-newline work; a UTF-8 BOM drops the header (API returns `missing_api_key`).
+- **Operations:** keyword search, get concept (by ID and by vocabulary+code), mappings.
 
 ## Claude Code mechanisms used (docs checked 2026-09-15, Claude Code 2.1.241)
 
 | Need | Mechanism | Source |
 |---|---|---|
-| Persistent user skill | `~/.claude/skills/<name>/SKILL.md`; follows `CLAUDE_CONFIG_DIR` (verified in `--debug` log: `Loading skills from: ... user=$CLAUDE_CONFIG_DIR/skills`) | code.claude.com/docs/en/skills |
-| Auto-activation | Model matches `description` (+`when_to_use`, 1,536-char cap) | skills, frontmatter reference |
-| Fewer prompts | `allowed-tools: Bash(curl *api.omophub.com*)`; grant lasts for the invoking turn, clears at the next user message | skills; permissions#wildcard-patterns |
-| Pick-up of new skill | Live detection, except a top-level skills dir created after session start needs restart | skills#live-change-detection |
-| Fetch instructions | WebFetch (returns a small model's extraction, not raw text) or `curl` via Bash | tools-reference#webfetch-tool-behavior |
-| Write approval | `.claude` is a protected path: writes prompt in `default`/`acceptEdits`; allow rules cannot pre-approve | permission-modes#protected-paths |
+| Persistent user skill | `~/.claude/skills/<name>/SKILL.md`; follows `CLAUDE_CONFIG_DIR` (verified in `--debug` log) | code.claude.com/docs/en/skills |
+| Auto-activation | Model matches `description` (1,536-char cap with `when_to_use`) | skills |
+| Fewer prompts | `allowed-tools: Bash(curl *api.omophub.com*)`, valid for the invoking turn | skills; permissions#wildcard-patterns |
+| New skill pick-up | Live detection, except a skills dir created after session start needs restart | skills#live-change-detection |
+| Fetch instructions | WebFetch (small-model extraction; HTTP upgraded to HTTPS) or `curl` | tools-reference#webfetch-tool-behavior |
+| Write approval | `.claude` is a protected path; writes prompt in `default`/`acceptEdits` | permission-modes#protected-paths |
 
-Not available in Claude Code (documented or absent from docs):
-- No "install skill from URL" command. `install <url>` works only because the model follows the fetched document.
-- No third-party secret store. `apiKeyHelper` is for Anthropic/gateway credentials; `headersHelper` and OAuth apply only to MCP servers.
-- Plugin marketplaces (`/plugin marketplace add owner/repo`) provide versioned install, but are Claude-specific and are not used here.
+Not available in Claude Code: an "install skill from URL" command, and a secret store for third-party
+credentials (`apiKeyHelper` covers Anthropic/gateway credentials; `headersHelper` and OAuth cover MCP servers).
 
 ## Test
 
-### Clean install (interactive)
+### Automated (no OMOPHub key, no Claude login)
 
-A separate config dir isolates the test from existing user skills and `~/.claude/CLAUDE.md`. It needs one `/login` (the Claude credential is keyed per config dir; verified: `Not logged in · Please run /login`).
+```bash
+uv run --with pytest pytest -q tests
+```
+
+Covers: key saved with mode 600 in a 700 dir and never printed; pending, denied, expired, slow_down,
+single-use device code; existing key kept; fallback placeholder created once; verify with valid and
+invalid keys; JSON token response; mock-served README rewrite. PowerShell blocks are not covered.
+
+### Demo against the mock (Claude Code, before OMOPHub ships the endpoints)
+
+Put an existing real key in a file outside the install path, e.g. `~/omophub-demo-key.txt`
+(`Authorization: Bearer oh_...`), and make sure `~/.config/omophub/auth-header.txt` does not exist.
+
+```bash
+python3 mock/agent_auth_server.py --issue-key-file ~/omophub-demo-key.txt
+```
+
+In another terminal:
 
 ```bash
 CLAUDE_CONFIG_DIR="$HOME/.claude-omophub-test" claude
 ```
 
-In the session: `/login` if prompted, then:
+`/login` once if prompted, then:
+
+```
+install http://127.0.0.1:8765/README.md (fetch it with curl)
+```
+
+WebFetch upgrades HTTP to HTTPS, so the prompt asks for curl. Without `--issue-key-file` the mock
+issues fake keys, verification runs against the mock, and later terminology calls to the real API fail.
+
+### Clean install against the real bootstrap
+
+```bash
+CLAUDE_CONFIG_DIR="$HOME/.claude-omophub-test" claude
+```
 
 ```
 install https://raw.githubusercontent.com/ablack3/installomophub/main/README.md
 ```
 
-Expected prompts: Bash approvals for `mkdir`/`curl` into `$HOME/.claude-omophub-test/skills/omophub`, key-file creation, `open`. One user step: create key, paste into file, reply `done`. Exit, then start a fresh session with the same command.
+Today step 3c gets `401 missing_api_key` and the agent uses the fallback (manual key).
 
 ### Terminology prompts (fresh session)
 
 | # | Prompt | Expect |
 |---|---|---|
-| 1 | `What is the standard OMOP concept for metformin?` | Skill `omophub`; `search/concepts` RxNorm; Ingredient with `standard_concept` S |
+| 1 | `What is the standard OMOP concept for metformin?` | Skill `omophub`; RxNorm Ingredient with `standard_concept` S |
 | 2 | `What does SNOMED CT code 22298006 mean, and what is its OMOP concept_id?` | `concepts/by-code/SNOMED/22298006` |
 | 3 | `Find the RxNorm concept for atorvastatin 20 MG oral tablet and the OMOP concept ID of its ingredient.` | search + get concept/relationships |
-| 4 | `I need the OMOP concept for "cold" from a patient problem list.` | Multiple candidates listed; asks or states pick |
+| 4 | `I need the OMOP concept for "cold" from a patient problem list.` | Candidates listed; asks or states pick |
 | 5 | `Map ICD-10-CM code I10 to its standard OMOP concept.` | `by-code/ICD10CM/I10` then `mappings` |
 | 6 | `Write a Python function that checks whether a string is a palindrome.` | No `omophub` skill, no OMOPHub call |
 
-### Headless activation check
+Headless check:
 
 ```bash
 CLAUDE_CONFIG_DIR="$HOME/.claude-omophub-test" claude -p "What is the standard OMOP concept for metformin?" --output-format stream-json --verbose > t1.jsonl
@@ -89,38 +125,37 @@ CLAUDE_CONFIG_DIR="$HOME/.claude-omophub-test" claude -p "What is the standard O
 grep -c '"skill":"omophub"' t1.jsonl; grep -c 'api.omophub.com' t1.jsonl
 ```
 
-Both counts > 0 for prompts 1-5; both 0 for prompt 6.
-
 ## Security limitations
 
-- Key is plaintext in `~/.config/omophub/auth-header.txt` (mode 600 on macOS/Linux; default profile ACL on Windows), same class as `~/.netrc` or `~/.npmrc`. Any process running as the user can read it, including the agent. "Never read the file" is an instruction, not enforcement.
-- Skill and bootstrap are served from mutable `main` over HTTPS with no digest or signature. Whoever controls the repo or URL controls the instructions an agent executes. The user's permission prompts are the only gate.
-- `allowed-tools: Bash(curl *api.omophub.com*)` pre-approves, for one turn, any curl command whose text contains `api.omophub.com`, including one that also sends data elsewhere. Remove the line to require a prompt per call.
-- The `OMOPHUB_API_KEY` fallback expands the key into curl's argv (visible to local `ps`).
-- Search terms go to a third party (OMOPHub). Do not send patient data.
-- If a user pastes the key into chat, it is stored in the local transcript and sent to the model provider; the bootstrap tells the agent to have the key rotated.
+- Key is plaintext in `~/.config/omophub/auth-header.txt` (600 on macOS/Linux; profile ACL on Windows). Any process running as the user can read it, including the agent.
+- `device_code` appears in the agent's commands and transcript. It is single use and expires in 15 minutes; whoever redeems it first after approval gets the key.
+- Remote phishing: an attacker can send a user a `verification_uri_complete` link. The approval page must show `key_name` and `user_code` (RFC 8628 section 5.4).
+- Skill and bootstrap are served from mutable `main` with no digest or signature.
+- `allowed-tools: Bash(curl *api.omophub.com*)` pre-approves, for one turn, any curl command containing that host.
+- The `OMOPHUB_API_KEY` fallback in SKILL.md expands the key into curl's argv.
+- Search terms go to OMOPHub. Do not send patient data.
+- The mock is HTTP on 127.0.0.1 with in-memory state and no authentication on its approval page.
 
 ## Platform limitations
 
-- Activation is model judgment over the skill description. It is not guaranteed, and competing skills or instructions (e.g. another OMOP vocabulary skill or a CLAUDE.md rule naming one) can win.
-- WebFetch passes the page through a small model, so an agent that reads the bootstrap with WebFetch may see a paraphrase. The document is short and says to download skill files with curl.
+- Skill activation is model judgment over the description; competing skills or CLAUDE.md rules can win.
+- An agent reading the bootstrap through WebFetch sees a paraphrase.
 - Writes under `~/.claude` always prompt in default modes.
-- After the invoking turn, follow-up curl calls prompt unless the user picks "don't ask again" (saved per repository in `.claude/settings.local.json`).
-- Tested: Claude Code on macOS only. Codex, Cursor, Gemini CLI, Copilot paths come from vercel-labs/skills and are unverified. PowerShell snippets are untested (no `pwsh` on the test machine).
-- `omophub.ai` currently serves a parked Namecheap page (HTTP 302 to www); HTTPS on the apex timed out.
+- After the invoking turn, curl calls prompt unless the user picks "don't ask again".
+- Tested: Claude Code on macOS only (and the sh blocks via pytest). Other agents' skill paths and all PowerShell blocks are unverified.
+- `omophub.ai` currently serves a parked Namecheap page.
 
 ## Mocked or POC-only
 
+- Sign-up endpoints and approval page exist only in `mock/`; the real API returns `401 missing_api_key` for them.
 - Bootstrap URL is a GitHub raw README, standing in for omophub.ai.
-- Skill is hosted in this repo, not by OMOPHub, and is not reconciled with `docs.omophub.com/skill.md`.
-- Auth is a manually created dashboard key in a file. No device flow, scopes, or expiry (OMOPHub docs state keys do not expire).
+- Skill hosted in this repo; not reconciled with `docs.omophub.com/skill.md`.
 - No versioning, update, integrity check, or uninstall command.
-- Verification is one `release-version` call.
 
 ## Shortest path to production
 
-1. Serve `README.md` at a stable OMOPHub URL (e.g. `https://omophub.com/install.md`, and at `/` for `Accept: text/markdown`, which WebFetch sends), linked from `llms.txt`.
-2. Publish this skill through OMOPHub's existing `/.well-known/agent-skills/index.json` (discovery RFC v0.2.0) with a valid name (`omophub`), a versioned URL, and a sha256 digest; have the bootstrap pin that version and check the digest.
-3. Replace the key file with OAuth 2.0 device authorization (RFC 8628) issuing scoped, expiring tokens stored in the OS credential store by a small cross-platform helper. Alternative for Claude Code: add OAuth to the hosted MCP server `mcp.omophub.com` (its OAuth metadata endpoints return 404 today); Claude Code documents OAuth and secure token storage for remote MCP servers. The skill keeps the "when to use" behavior either way.
-4. Offer a Claude Code plugin marketplace entry for versioned updates, keeping the curl path for other agents.
-5. Run the six test prompts headless per agent in CI and track activation rate.
+1. OMOPHub implements `docs/agent-signup-api.md`: two unauthenticated endpoints, a dashboard `/device` page, key labeling and revocation.
+2. Serve `README.md` at a stable OMOPHub URL (and `/` for `Accept: text/markdown`), linked from `llms.txt`; remove the fallback once sign-up is live.
+3. Publish the skill through `/.well-known/agent-skills/index.json` (discovery RFC v0.2.0) with a versioned URL and sha256 digest; the bootstrap pins and checks it.
+4. Optional: OS credential store instead of the key file, via a small cross-platform helper.
+5. Run the six prompts headless per agent in CI and track activation rate.

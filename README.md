@@ -9,7 +9,7 @@ Installing it gives your agent a skill that resolves medical terminology through
 guessing concept IDs. The install creates a free OMOPHub account and API key with your approval.
 
 Status: proof of concept, version 0.2. Tested with Claude Code on macOS. The sign-up endpoints in
-step 3 are a proposal (`docs/agent-signup-api.md`); if they return 404, use the step 3 fallback.
+step 3 are a proposal (`docs/agent-signup-api.md`); until they exist, step 3c routes to the fallback.
 
 ---
 
@@ -107,7 +107,8 @@ curl.exe -sS -d client_id=omophub-agent-install --data-urlencode "key_name=AGENT
 ```
 
 `HTTP 200`: note `device_code`, `user_code`, and `verification_uri_complete` from the JSON.
-`HTTP 404`: the endpoint is not available; use the fallback at the end of step 3.
+Any other status (today `HTTP 401` with `missing_api_key`): sign-up is not available; use the
+fallback at the end of step 3.
 
 #### 3d. User approves in the browser
 

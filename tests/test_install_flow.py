@@ -177,6 +177,17 @@ def test_json_token_response_for_standard_clients(server, tmp_path):
     assert token["token_type"] == "Bearer" and token["access_token"].startswith("oh_mock_")
 
 
+def test_fallback_creates_placeholder_once(server, tmp_path):
+    block = sh_blocks("Fallback")[0]
+    key_path = tmp_path / KEY_FILE
+    assert run(block, server, tmp_path).stdout.strip() == f"created {key_path}"
+    assert key_path.read_text() == "Authorization: Bearer PASTE_KEY_HERE\n"
+    assert stat.S_IMODE(key_path.stat().st_mode) == 0o600
+    key_path.write_text("Authorization: Bearer oh_real\n")
+    assert run(block, server, tmp_path).stdout.strip() == "key file exists"
+    assert key_path.read_text() == "Authorization: Bearer oh_real\n"
+
+
 def test_served_readme_points_auth_at_mock(server):
     text = urllib.request.urlopen(base_url(server) + "/README.md").read().decode()
     assert f"{base_url(server)}/v1/auth/device/code" in text

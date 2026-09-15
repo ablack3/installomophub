@@ -65,6 +65,9 @@ Errors `400` (RFC 8628 section 3.5). Body is the code alone with `Accept: text/p
 
 ## Server requirements
 
+- Both `/v1/auth/device/*` endpoints must skip API-key authentication. Today any unknown `/v1` path,
+  including `POST /v1/auth/device/code`, returns `401 missing_api_key` (checked 2026-09-15), so the
+  auth middleware runs before routing.
 - `device_code`: at least 128 bits of randomness, single use, stored hashed.
 - `user_code`: 8 characters from `BCDFGHJKLMNPQRSTVWXZ` (RFC 8628 section 6.1), displayed `XXXX-XXXX`, case-insensitive.
 - Grant lifetime 15 minutes; the key is returned at most once.
