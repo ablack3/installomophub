@@ -20,7 +20,7 @@ facts when they can be resolved through OMOPHub.
   `-H "Authorization: Bearer $OMOPHUB_API_KEY"` instead.
 - Never read, print, or copy the header file or the key.
 - If neither exists, tell the user OMOPHub is not configured and to run
-  `install https://raw.githubusercontent.com/ablack3/installomophub/main/README.md`.
+  `install https://raw.githubusercontent.com/ablack3/installomophub/main/install.md`.
 
 ## Operations
 

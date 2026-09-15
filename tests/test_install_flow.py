@@ -1,4 +1,4 @@
-"""Run the README's sh commands for steps 3 and 4 against the mock sign-up API.
+"""Run install.md's sh commands for steps 3 and 4 against the mock sign-up API.
 
     uv run --with pytest pytest -q tests
 """
@@ -25,9 +25,9 @@ KEY_FILE = pathlib.Path(".config/omophub/auth-header.txt")
 
 
 def sh_blocks(heading_prefix):
-    """Return the ```sh blocks under the README heading whose text starts with heading_prefix."""
+    """Return the ```sh blocks under the install.md heading whose text starts with heading_prefix."""
     blocks, heading, buf = [], None, None
-    for line in (REPO / "README.md").read_text().splitlines():
+    for line in (REPO / "install.md").read_text().splitlines():
         if buf is not None:
             if line.startswith("```"):
                 if heading.startswith(heading_prefix):
@@ -69,7 +69,7 @@ def base_url(server):
 
 
 def run(block, server, home, **placeholders):
-    """Run a README block the way an agent would: fill placeholders, point API calls at the mock."""
+    """Run an install.md block the way an agent would: fill placeholders, point API calls at the mock."""
     command = block.replace(mock.REAL_API, base_url(server))
     for name, value in placeholders.items():
         command = command.replace(name, value)
@@ -188,7 +188,7 @@ def test_fallback_creates_placeholder_once(server, tmp_path):
     assert key_path.read_text() == "Authorization: Bearer oh_real\n"
 
 
-def test_served_readme_points_auth_at_mock(server):
-    text = urllib.request.urlopen(base_url(server) + "/README.md").read().decode()
+def test_served_install_doc_points_auth_at_mock(server):
+    text = urllib.request.urlopen(base_url(server) + "/install.md").read().decode()
     assert f"{base_url(server)}/v1/auth/device/code" in text
     assert f"{mock.REAL_API}/v1/auth/" not in text

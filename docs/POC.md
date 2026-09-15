@@ -4,19 +4,19 @@
 
 | Path | Role |
 |---|---|
-| `README.md` | Bootstrap document. The stable, agent-independent interface an agent reads after `install <url>`. |
+| `install.md` | Bootstrap document. The stable, agent-independent interface an agent reads after `install <url>`. |
 | `skill/omophub/SKILL.md` | Skill: trigger description, behavioral rule, auth, 3 operations, answering rules. |
 | `skill/omophub/reference.md` | Parameters, response fields, error codes. Loaded only when needed. |
 | `docs/agent-signup-api.md` | Proposed OMOPHub sign-up endpoints (RFC 8628 device grant). Not deployed. |
 | `mock/agent_auth_server.py` | Stdlib mock of the proposed endpoints, approval page, and `release-version`. |
-| `tests/test_install_flow.py` | Runs the README's sh blocks (steps 3a, 3c, 3e, fallback, 4) against the mock. |
+| `tests/test_install_flow.py` | Runs install.md's sh blocks (steps 3a, 3c, 3e, fallback, 4) against the mock. |
 | `docs/POC.md` | This file. |
 
 ## Architecture
 
 ```
 user: "install <bootstrap URL>"
-  -> agent reads README.md
+  -> agent reads install.md
   -> step 1: pick user-level skills dir (Claude Code: ~/.claude/skills or $CLAUDE_CONFIG_DIR/skills)
   -> step 2: curl downloads skill/omophub/{SKILL.md,reference.md}
   -> step 3: key
@@ -66,7 +66,7 @@ uv run --with pytest pytest -q tests
 
 Covers: key saved with mode 600 in a 700 dir and never printed; pending, denied, expired, slow_down,
 single-use device code; existing key kept; fallback placeholder created once; verify with valid and
-invalid keys; JSON token response; mock-served README rewrite. PowerShell blocks are not covered.
+invalid keys; JSON token response; mock-served install.md rewrite. PowerShell blocks are not covered.
 
 ### Demo against the mock (Claude Code, before OMOPHub ships the endpoints)
 
@@ -86,7 +86,7 @@ CLAUDE_CONFIG_DIR="$HOME/.claude-omophub-test" claude
 `/login` once if prompted, then:
 
 ```
-install http://127.0.0.1:8765/README.md (fetch it with curl)
+install http://127.0.0.1:8765/install.md (fetch it with curl)
 ```
 
 WebFetch upgrades HTTP to HTTPS, so the prompt asks for curl. Without `--issue-key-file` the mock
@@ -99,7 +99,7 @@ CLAUDE_CONFIG_DIR="$HOME/.claude-omophub-test" claude
 ```
 
 ```
-install https://raw.githubusercontent.com/ablack3/installomophub/main/README.md
+install https://raw.githubusercontent.com/ablack3/installomophub/main/install.md
 ```
 
 Today step 3c gets `401 missing_api_key` and the agent uses the fallback (manual key).
@@ -148,14 +148,14 @@ grep -c '"skill":"omophub"' t1.jsonl; grep -c 'api.omophub.com' t1.jsonl
 ## Mocked or POC-only
 
 - Sign-up endpoints and approval page exist only in `mock/`; the real API returns `401 missing_api_key` for them.
-- Bootstrap URL is a GitHub raw README, standing in for omophub.ai.
+- Bootstrap URL is GitHub raw install.md, standing in for omophub.ai.
 - Skill hosted in this repo; not reconciled with `docs.omophub.com/skill.md`.
 - No versioning, update, integrity check, or uninstall command.
 
 ## Shortest path to production
 
 1. OMOPHub implements `docs/agent-signup-api.md`: two unauthenticated endpoints, a dashboard `/device` page, key labeling and revocation.
-2. Serve `README.md` at a stable OMOPHub URL (and `/` for `Accept: text/markdown`), linked from `llms.txt`; remove the fallback once sign-up is live.
+2. Serve `install.md` at a stable OMOPHub URL (and `/` for `Accept: text/markdown`), linked from `llms.txt`; remove the fallback once sign-up is live.
 3. Publish the skill through `/.well-known/agent-skills/index.json` (discovery RFC v0.2.0) with a versioned URL and sha256 digest; the bootstrap pins and checks it.
 4. Optional: OS credential store instead of the key file, via a small cross-platform helper.
 5. Run the six prompts headless per agent in CI and track activation rate.

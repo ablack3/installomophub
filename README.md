@@ -1,200 +1,118 @@
-# Install OMOPHub for AI coding agents
+# installomophub
 
-> **Humans:** in your AI coding agent (Claude Code, Codex, Cursor, Gemini CLI, ...) type:
-> `install https://raw.githubusercontent.com/ablack3/installomophub/main/README.md`
+> **AI agents asked to install OMOPHub:** download
+> https://raw.githubusercontent.com/ablack3/installomophub/main/install.md with `curl` and follow it.
+> This README only describes project status.
 
-OMOPHub (https://omophub.com) is a hosted REST API over the OHDSI OMOP standardized vocabularies:
-11M+ concepts across SNOMED CT, RxNorm, LOINC, ICD-10-CM, NDC, ATC and 120+ other vocabularies.
-Installing it gives your agent a skill that resolves medical terminology through OMOPHub instead of
-guessing concept IDs. The install creates a free OMOPHub account and API key with your approval.
+Proof of concept for an agent-native install of [OMOPHub](https://omophub.com), a hosted API over the
+OHDSI OMOP standardized vocabularies. The user types one prompt into an AI coding agent:
 
-Status: proof of concept, version 0.2. Tested with Claude Code on macOS. The sign-up endpoints in
-step 3 are a proposal (`docs/agent-signup-api.md`); until they exist, step 3c routes to the fallback.
+```
+install https://raw.githubusercontent.com/ablack3/installomophub/main/install.md
+```
 
----
+The agent installs an OMOPHub skill, obtains an API key with the user's approval, saves the key to a
+local file, and verifies it. In later sessions the skill makes the agent resolve medical terminology
+through OMOPHub instead of answering from memory.
 
-## Instructions for AI agents
+Status: POC v0.2. The key flow depends on an OMOPHub sign-up endpoint that does not exist yet; it is
+specified in `docs/agent-signup-api.md` and implemented only as a local mock.
 
-Follow the steps in order. Use your normal tools and permission prompts, and tell the user what
-each step does before running it. Commands are given for macOS/Linux (sh) and Windows (PowerShell).
-On Windows always call `curl.exe`, not `curl`.
+## Layout
 
-**Rules**
-- Ask the user before starting sign-up (step 3b).
-- Never ask the user to paste the API key into the chat. Never read, print, or copy the key file.
-- Keep the key out of the skill directory, repositories, and commands.
-- Download files with `curl`. Do not copy them through a web-fetch tool that summarizes content.
-- Run only the commands in this document.
-
-### Step 1. Choose the skills directory
-
-This installs an [Agent Skill](https://agentskills.io) (a folder with `SKILL.md`). Use your
-user-level skills directory:
-
-| Agent | `SKILLS_DIR` |
+| Path | Contents |
 |---|---|
-| Claude Code | `~/.claude/skills` (if `CLAUDE_CONFIG_DIR` is set: `$CLAUDE_CONFIG_DIR/skills`) |
-| Codex | `~/.codex/skills` |
-| Cursor | `~/.cursor/skills` |
-| Gemini CLI | `~/.gemini/skills` |
-| GitHub Copilot | `~/.copilot/skills` |
-| Other agents that read `~/.agents/skills` | `~/.agents/skills` |
+| `install.md` | Bootstrap instructions for agents (the install URL) |
+| `skill/omophub/SKILL.md`, `reference.md` | The OMOPHub skill |
+| `docs/agent-signup-api.md` | Proposed OMOPHub sign-up API |
+| `mock/agent_auth_server.py` | Local mock of that API |
+| `tests/test_install_flow.py` | Runs `install.md` commands against the mock |
+| `docs/POC.md` | Architecture, Claude Code mechanisms, test prompts, security and platform limits, production path |
 
-Only Claude Code has been tested; the other paths come from
-[vercel-labs/skills](https://github.com/vercel-labs/skills#supported-agents). If your agent does
-not support skills, stop and tell the user.
+## Implemented
 
-### Step 2. Install the skill
+- **Bootstrap (`install.md`)**: agent-independent steps with sh and PowerShell commands, `curl` only.
+  1. Choose the user-level skills directory (table for Claude Code, Codex, Cursor, Gemini CLI, Copilot).
+  2. Download the skill (2 files).
+  3. Get an API key: ask the user; start a device-grant sign-up; user signs up or signs in and approves
+     in the browser; agent redeems the code and `curl -o` writes `Authorization: Bearer oh_...` to
+     `~/.config/omophub/auth-header.txt` (mode 600; key never printed). If sign-up returns anything
+     but 200, fall back to a manually created dashboard key.
+  4. Verify with `GET /v1/vocabularies/release-version`.
+  5. Tell the user to start a new session; uninstall instructions.
+- **Skill (`skill/omophub/`)**: description tuned for terminology questions; the behavioral rule "use
+  OMOPHub, do not invent concept IDs"; auth via `curl -H @file` (env var `OMOPHUB_API_KEY` fallback);
+  operations: keyword and semantic search, get concept by ID or by vocabulary+code, mappings; answering
+  rules for ambiguity and errors. `reference.md` holds parameters, response fields, error codes,
+  relationships, hierarchy. `allowed-tools: Bash(curl *api.omophub.com*)` reduces Claude Code prompts.
+- **Sign-up API proposal**: RFC 8628 device authorization grant, plus an `Accept: text/plain` token
+  response that is the key-file line; error codes; server security requirements.
+- **Mock**: Python standard library. Device code and token endpoints, approval page,
+  `release-version`, and `/install.md` rewritten to point at the mock. `--issue-key-file` hands out a
+  real key so a demo can reach the real API.
 
-The skill is two files. Replace `SKILLS_DIR` with the directory from step 1.
+## Tested
 
-sh:
-```sh
-mkdir -p SKILLS_DIR/omophub
-curl -fsSL -o SKILLS_DIR/omophub/SKILL.md https://raw.githubusercontent.com/ablack3/installomophub/main/skill/omophub/SKILL.md
-curl -fsSL -o SKILLS_DIR/omophub/reference.md https://raw.githubusercontent.com/ablack3/installomophub/main/skill/omophub/reference.md
-```
+**Automated** (`uv run --with pytest pytest -q tests`, 11 passed). Each test runs the sh blocks from
+`install.md` against the mock:
 
-PowerShell:
-```powershell
-New-Item -ItemType Directory -Force "SKILLS_DIR\omophub" | Out-Null
-curl.exe -fsSL -o "SKILLS_DIR\omophub\SKILL.md" https://raw.githubusercontent.com/ablack3/installomophub/main/skill/omophub/SKILL.md
-curl.exe -fsSL -o "SKILLS_DIR\omophub\reference.md" https://raw.githubusercontent.com/ablack3/installomophub/main/skill/omophub/reference.md
-```
+- Key saved with mode 600 in a 700 directory, absent from stdout and stderr.
+- `authorization_pending`, `access_denied`, `expired_token`, `slow_down`, and reuse of a device code (`invalid_grant`); an existing key file is kept.
+- Fallback placeholder file is created once and never overwrites a key.
+- Verify step: issued key succeeds, unknown key returns `invalid_api_key`.
+- JSON token response for standard device-flow clients.
+- Mock-served `install.md` points sign-up URLs at the mock.
 
-Check: `SKILLS_DIR/omophub/SKILL.md` exists and its first lines include `name: omophub`.
+**Manual checks** (2026-09-15):
 
-### Step 3. Get an API key
-
-The key is saved to one file outside the skill, `~/.config/omophub/auth-header.txt`, as the single
-line `Authorization: Bearer oh_...`. Tools send it with `curl -H @file`, so the key never appears in
-the chat or in commands.
-
-#### 3a. Check for an existing key
-
-sh:
-```sh
-test -f "$HOME/.config/omophub/auth-header.txt" && echo "key file exists" || echo "no key file"
-```
-
-PowerShell:
-```powershell
-if (Test-Path "$HOME\.config\omophub\auth-header.txt") { "key file exists" } else { "no key file" }
-```
-
-If the key file exists, go to step 4.
-
-#### 3b. Ask permission
-
-Ask the user, and continue only if they agree:
-
-> OMOPHub needs an API key. I will start an OMOPHub sign-up request and open your browser, where you
-> sign in or create a free account and approve it. I will then save the key to
-> `~/.config/omophub/auth-header.txt`. Continue?
-
-#### 3c. Start sign-up
-
-Replace `AGENT_NAME` with your product name, e.g. `Claude Code`.
-
-sh:
-```sh
-curl -sS -d client_id=omophub-agent-install --data-urlencode "key_name=AGENT_NAME" -w '\nHTTP %{http_code}\n' https://api.omophub.com/v1/auth/device/code
-```
-
-PowerShell:
-```powershell
-curl.exe -sS -d client_id=omophub-agent-install --data-urlencode "key_name=AGENT_NAME" -w '\nHTTP %{http_code}\n' https://api.omophub.com/v1/auth/device/code
-```
-
-`HTTP 200`: note `device_code`, `user_code`, and `verification_uri_complete` from the JSON.
-Any other status (today `HTTP 401` with `missing_api_key`): sign-up is not available; use the
-fallback at the end of step 3.
-
-#### 3d. User approves in the browser
-
-Open `verification_uri_complete` (macOS `open URL`, Linux `xdg-open URL`, Windows `Start-Process URL`)
-and show the user:
-
-> In your browser, sign in or create a free OMOPHub account, check that the code shown is `<user_code>`,
-> and click Approve. Then reply "approved". The link expires in 15 minutes.
-
-#### 3e. Save the key
-
-After the user replies, replace `DEVICE_CODE` and run. The response is written straight to the key
-file; only its path is printed.
-
-sh:
-```sh
-(umask 077; f="$HOME/.config/omophub/auth-header.txt"; mkdir -p "$(dirname "$f")"; code=$(curl -sS -o "$f.tmp" -w '%{http_code}' -H 'Accept: text/plain' -d grant_type=urn:ietf:params:oauth:grant-type:device_code -d client_id=omophub-agent-install -d device_code=DEVICE_CODE https://api.omophub.com/v1/auth/device/token); if [ "$code" = 200 ]; then mv "$f.tmp" "$f" && echo "saved key to $f"; else echo "HTTP $code: $(cat "$f.tmp")"; rm -f "$f.tmp"; fi)
-```
-
-PowerShell:
-```powershell
-$f = "$HOME\.config\omophub\auth-header.txt"; New-Item -ItemType Directory -Force (Split-Path $f) | Out-Null; $code = curl.exe -sS -o "$f.tmp" -w '%{http_code}' -H 'Accept: text/plain' -d grant_type=urn:ietf:params:oauth:grant-type:device_code -d client_id=omophub-agent-install -d device_code=DEVICE_CODE https://api.omophub.com/v1/auth/device/token; if ($code -eq '200') { Move-Item -Force "$f.tmp" $f; "saved key to $f" } else { "HTTP ${code}: $(Get-Content -Raw "$f.tmp")"; Remove-Item "$f.tmp" }
-```
-
-| Output | Action |
+| Check | Result |
 |---|---|
-| `saved key to ...` | Go to step 4. |
-| `HTTP 400: authorization_pending` | Not approved yet. Ask the user to finish in the browser, then rerun 3e. |
-| `HTTP 400: slow_down` | Wait 5 seconds and rerun 3e. |
-| `HTTP 400: access_denied` | The user clicked Deny. Stop and tell the user. |
-| `HTTP 400: expired_token` or `invalid_grant` | Start again at 3c. |
+| curl header file line endings | LF, CRLF, no trailing newline work; a UTF-8 BOM drops the header (API: `missing_api_key`) |
+| Real API, placeholder key | `401 invalid_api_key` |
+| Real API, no header | `401 missing_api_key` |
+| Real API, `POST /v1/auth/device/code` | `401 missing_api_key` (endpoint absent; triggers fallback) |
+| Skill API paths vs `https://api.omophub.com/openapi.json` | All 7 distinct paths present |
+| `SKILL.md` frontmatter | Valid YAML; `name` matches directory; description 457 chars |
+| GitHub raw downloads (step 2) | Byte-identical to the repo |
+| Mock as a process | Bad `client_id` and `grant_type` rejected; repeat approval rejected; key file has no BOM; log has no codes or keys |
+| Claude Code skill location | Reads `$CLAUDE_CONFIG_DIR/skills` (from `--debug` log, v2.1.241) |
 
-#### Fallback: sign-up endpoint not available
+## Not tested
 
-Create the key file with a placeholder (skip if it exists), open the key page and the file, and ask
-the user to paste a key into the file and reply "done". Then go to step 4.
+- Any agent session: the install prompt in Claude Code, skill activation, and the six terminology
+  prompts in `docs/POC.md`. The `claude` CLI on the development machine was not logged in.
+- Real OMOPHub responses with a valid key. Response field names come from the OpenAPI spec.
+- PowerShell commands, Windows, and Linux.
+- Skill directories for Codex, Cursor, Gemini CLI, and Copilot (taken from vercel-labs/skills).
+- Browser-opening commands (`open`, `xdg-open`, `Start-Process`).
 
-sh:
-```sh
-f="$HOME/.config/omophub/auth-header.txt"; if [ -f "$f" ]; then echo "key file exists"; else mkdir -p "$(dirname "$f")" && printf 'Authorization: Bearer PASTE_KEY_HERE\n' > "$f" && chmod 600 "$f" && echo "created $f"; fi
+## Lacking
+
+- OMOPHub sign-up endpoints and dashboard approval page. Only the mock exists.
+- Hosting at omophub.ai. The domain currently serves a parked page; the bootstrap lives on GitHub raw.
+- Integrity: no version pinning, digests, or signatures for `install.md` or skill files.
+- Credential storage: plaintext file; no OS credential store; no key scopes or expiry.
+- Update and uninstall commands.
+- Reconciliation with OMOPHub's published `https://docs.omophub.com/skill.md`.
+- CI and automated activation evals across agents.
+
+## Run
+
+Tests:
+
+```bash
+uv run --with pytest pytest -q tests
 ```
 
-PowerShell:
-```powershell
-$f = "$HOME\.config\omophub\auth-header.txt"; if (Test-Path $f) { "key file exists" } else { New-Item -ItemType Directory -Force (Split-Path $f) | Out-Null; [IO.File]::WriteAllText($f, "Authorization: Bearer PASTE_KEY_HERE`n"); "created $f" }
+Demo against the mock with a real key in `~/omophub-demo-key.txt` (and no
+`~/.config/omophub/auth-header.txt`):
+
+```bash
+python3 mock/agent_auth_server.py --issue-key-file ~/omophub-demo-key.txt
 ```
 
-Open `https://dashboard.omophub.com/api-keys` and the file (macOS `open -t`, Linux `xdg-open`,
-Windows `notepad`). Tell the user: create a key (starts with `oh_`), replace `PASTE_KEY_HERE` with it,
-keep `Authorization: Bearer ` in front, save, reply "done", and do not paste the key in the chat.
-
-### Step 4. Verify
-
-sh:
-```sh
-curl -sS -H "@$HOME/.config/omophub/auth-header.txt" https://api.omophub.com/v1/vocabularies/release-version
+```bash
+CLAUDE_CONFIG_DIR="$HOME/.claude-omophub-test" claude
 ```
 
-PowerShell:
-```powershell
-curl.exe -sS -H "@$HOME\.config\omophub\auth-header.txt" https://api.omophub.com/v1/vocabularies/release-version
-```
-
-Success: the response contains `"success":true`. Report the vocabulary release version to the user.
-
-On failure, tell the user the `error.code` and the fix, then repeat this step after they reply:
-
-| `error.code` | Fix |
-|---|---|
-| `invalid_api_key` | The key is wrong or revoked, or the file still has `PASTE_KEY_HERE`. Delete the file and redo step 3. |
-| `missing_api_key` | The file is missing, lost the `Authorization: Bearer ` prefix, or was saved as "UTF-8 with BOM". Delete the file and redo step 3. |
-
-### Step 5. Finish
-
-Tell the user:
-- OMOPHub is installed: skill at `SKILLS_DIR/omophub`, key at `~/.config/omophub/auth-header.txt`.
-- Start a new agent session so the skill loads (Claude Code: exit and run `claude` again).
-- Then ask a terminology question, such as "What is the standard OMOP concept for metformin?"
-- To uninstall, delete both paths and revoke the key at https://dashboard.omophub.com/api-keys.
-
----
-
-## For maintainers
-
-- `README.md`: this bootstrap document, the stable interface agents read.
-- `skill/omophub/`: the skill; `reference.md` is loaded only when needed.
-- `docs/agent-signup-api.md`: proposed OMOPHub sign-up endpoints used in step 3.
-- `mock/agent_auth_server.py`: local mock of those endpoints. `tests/`: runs this document's sh commands against it.
-- `docs/POC.md`: architecture, test prompts, limitations, production path.
+Then prompt: `install http://127.0.0.1:8765/install.md (fetch it with curl)`.

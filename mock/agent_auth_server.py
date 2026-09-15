@@ -4,11 +4,11 @@
 Test fixture and demo aid. Not part of OMOPHub. Standard library only.
 
     python3 mock/agent_auth_server.py
-        Issues fake oh_mock_... keys. Serves /README.md with auth and verify URLs pointed at the mock.
+        Issues fake oh_mock_... keys. Serves /install.md with auth and verify URLs pointed at the mock.
 
     python3 mock/agent_auth_server.py --issue-key-file ~/omophub-demo-key.txt
         Hands out the real key in that file on approval, so the installed skill works against the
-        real API. /README.md then points only the auth URLs at the mock.
+        real API. /install.md then points only the auth URLs at the mock.
 """
 
 import argparse
@@ -117,8 +117,8 @@ def device_page(user_code, key_name):
 </form>"""
 
 
-def rewrite_readme(base_url, rewrite_verify):
-    text = (REPO_ROOT / "README.md").read_text()
+def rewrite_install_doc(base_url, rewrite_verify):
+    text = (REPO_ROOT / "install.md").read_text()
     text = text.replace(f"{REAL_API}/v1/auth/", f"{base_url}/v1/auth/")
     if rewrite_verify:
         text = text.replace(f"{REAL_API}/v1/vocabularies/", f"{base_url}/v1/vocabularies/")
@@ -170,8 +170,8 @@ class Handler(BaseHTTPRequestHandler):
             if f"Authorization: {header}" not in self.store.valid_headers:
                 return self.send_json(401, {"success": False, "error": {"code": "invalid_api_key", "message": "Invalid API key"}})
             return self.send_json(200, {"success": True, "data": {"version": "mock"}})
-        if url.path == "/README.md":
-            body = rewrite_readme(self.base_url, rewrite_verify=self.store.issued_header is None)
+        if url.path == "/install.md":
+            body = rewrite_install_doc(self.base_url, rewrite_verify=self.store.issued_header is None)
             return self.send(200, body, "text/markdown; charset=utf-8")
         self.send_json(404, {"error": "not_found"})
 
@@ -232,7 +232,7 @@ def main():
     server = build_server(port=args.port, issued_header=issued)
     base = "http://%s:%s" % server.server_address[:2]
     print(f"mock OMOPHub sign-up API on {base}")
-    print(f"agent prompt: install {base}/README.md (fetch it with curl)")
+    print(f"agent prompt: install {base}/install.md (fetch it with curl)")
     server.serve_forever()
 
 
